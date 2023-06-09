@@ -59,7 +59,7 @@ def download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id,
     # 遍历 list_data 中的图片路径
     for i, image_name in enumerate(list_data):
         # 构建图片路径
-        image_path = f"user-train/{user_id}/{data_id}/{image_name}"
+        image_path = f"user-train/{user_id}/{image_name}"
 
         # 下载文件
         # response = cos_client.get_object(Bucket=PRIVATE_BUCKET, Key=image_path)
