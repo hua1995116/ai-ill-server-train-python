@@ -1,0 +1,7 @@
+asyncio
+cos-python-sdk-v5
+fastapi
+python-dotenv
+aiohttp
+uvicorn
+gunicorn
