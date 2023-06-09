@@ -16,6 +16,7 @@ import os
 import shutil
 import select
 import subprocess
+import re
 
 logging.basicConfig(filename='app.log', level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
@@ -81,6 +82,45 @@ def download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id,
 
         print(f"Downloaded file: {local_file_path}")
 
+async def run_command(env, callback_url, model_id, server_config, JobURL, *args):
+    # Create the subprocess
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
+
+    # Compile a regex to match the progress
+    progress_regex = re.compile(r"epoch (\d+)/(\d+)")
+
+    # Read output from the subprocess
+    async for line in process.stdout:
+        line = line.decode().strip()
+        print(f'STDOUT: {line}')
+        
+        # Match the progress
+        match = progress_regex.search(line)
+        if match:
+            current, total = match.groups()
+            progress = int(current) / int(total)
+            print(f"Progress: {progress*100}%")
+            await callback_sync_url(model_id, callback_url, {
+                "status": 0,
+                "msg": "进行中",
+                "process": progress * 100,
+                "status": 1,
+                "server_config": server_config,
+                "model_id": model_id,
+                "JobURL": JobURL
+            }, 3)
+
+    # Read error from the subprocess
+    # async for line in process.stderr:
+    #     print(f'STDERR: {line.decode().strip()}')
+
+    # Wait for the subprocess to finish
+    await process.wait()
+
 async def callback_sync_url(id, callback_url, config, retry=3):
     print(id, "callbackSync", callback_url, config, retry)
     if retry == 1:
@@ -116,7 +156,7 @@ class RequestLoggerAdapter(logging.LoggerAdapter):
         return msg, kwargs
 
 
-async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoches, network_dim, network_alpha, type, trigger_word, JobURL, model, model_id, length, data_id, user_id, callback_url):
+async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoches, network_dim, network_alpha, type, trigger_word, JobURL, model, model_id, length, data_id, user_id, count, modelId, callback_url):
     #    步骤1：获取视频的id
     #    步骤2：使用ffmpeg拆帧
     #    步骤3：使用自动缩放图片大小
@@ -161,24 +201,24 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
             KEY_WORD = trigger_word
         ROOT_PATH = "/root/autodl-tmp/lora-scripts"
 
-        os.environ['ROOT_PATH'] = ROOT_PATH
-        os.environ['FROM_MODEL'] = model
-        os.environ['lr'] = str(lr)
-        os.environ['unet_lr'] = str(unet_lr)
-        os.environ['text_encoder_lr'] = str(text_encoder_lr)
-        os.environ['max_train_epoches'] = str(max_train_epoches)
-        os.environ['network_dim'] = str(network_dim)
-        os.environ['network_alpha'] = str(network_alpha)
-        os.environ['model_ckpt'] = model
-        os.environ['KEY_WORD'] = KEY_WORD
-        os.environ['LORA_NAME'] = LORA_NAME
+        # os.environ['ROOT_PATH'] = ROOT_PATH
+        # os.environ['FROM_MODEL'] = model
+        # os.environ['lr'] = str(lr)
+        # os.environ['unet_lr'] = str(unet_lr)
+        # os.environ['text_encoder_lr'] = str(text_encoder_lr)
+        # os.environ['max_train_epoches'] = str(max_train_epoches)
+        # os.environ['network_dim'] = str(network_dim)
+        # os.environ['network_alpha'] = str(network_alpha)
+        # os.environ['model_ckpt'] = model
+        # os.environ['KEY_WORD'] = KEY_WORD
+        # os.environ['LORA_NAME'] = LORA_NAME
 
         TRAIN_DIR = os.path.join(ROOT_PATH, f"{model_id}-input", f"{length}_{model_id}")
 
         # 创建目录
         os.makedirs(TRAIN_DIR, exist_ok=True)
 
-        os.environ['TRAIN_DIR'] = TRAIN_DIR
+        # os.environ['TRAIN_DIR'] = TRAIN_DIR
 
         # 获取配置
         # response = cos_client.get_object(
@@ -248,48 +288,36 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
         #     # 处理命令执行异常
         #     logger_adapter.info(f"命令执行失败：{e}")
         #     return
-
+        env_vars = {
+            'ROOT_PATH': ROOT_PATH,
+            'FROM_MODEL': model,
+            'lr': str(lr),
+            'unet_lr': str(unet_lr),
+            'text_encoder_lr': str(text_encoder_lr),
+            'max_train_epoches': str(max_train_epoches),
+            'network_dim': str(network_dim),
+            'network_alpha': str(network_alpha),
+            'model_ckpt': model,
+            'KEY_WORD': KEY_WORD,
+            'LORA_NAME': LORA_NAME,
+            'TRAIN_DIR': TRAIN_DIR
+        }
         try:
-            # Open a subprocess and connect to its output streams
-            process = subprocess.Popen(["bash", "-x", "lora-train.sh"],
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, close_fds=True)
-
-            # Prepare to select from the output streams
-            read_set = [process.stdout, process.stderr]
-
-            while process.poll() is None:
-                # Wait for output on one of the streams
-                ready_to_read, _, _ = select.select(read_set, [], [])
-
-                # Handle the output
-                for stream in ready_to_read:
-                    if stream is process.stdout:
-                        line = stream.readline().decode("utf-8").strip()
-                        print(f"{line}")
-                    elif stream is process.stderr:
-                        line = stream.readline().decode("utf-8").strip()
-                        print(f"{line}")
-
-            # Handle any remaining output after the process has terminated
-            for stream in read_set:
-                line = stream.readline().decode("utf-8").strip()
-                while line != "":
-                    if stream is process.stdout:
-                        print(f"{line}")
-                    elif stream is process.stderr:
-                        print(f"{line}")
-                    line = stream.readline().decode("utf-8").strip()
-
+            logger_adapter.info("开始训练")
+            await run_command(env_vars, callback_url, model_id, server_config, JobURL, "bash", "-x", "lora-train.sh")
         except Exception as e:
             # 处理命令执行异常
             logger_adapter.error(f"命令执行失败：{e}")
             return
+        
+        # 读取文本上传参考词
+        
 
 
         logger_adapter.info("训练结束")
         # 上传lora
         logger_adapter.info("开始上传lora")
-        shutil.copy(f"{ROOT_PATH}/output/{LORA_NAME}.safetensors", "~/autodl-nas/Lora")
+        shutil.copy(f"{ROOT_PATH}/output/{LORA_NAME}.safetensors", "/root/autodl-nas/Lora")
         logger_adapter.info("上传lora结束")
 
         # 清除数据
@@ -309,12 +337,16 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
 
         # 回调
         end_time = datetime.now().timestamp()
-        logger_adapter.info(f"耗时：{end_time - start_time}")
+        duration = (end_time - start_time) / 1000
+        logger_adapter.info(f"耗时：{duration}")
         await callback_sync_url(model_id, callback_url, {
             "status": 1,
             "msg": "生成成功",
+            "count": count,
+            "duration": duration,
             "server_config": server_config,
             "model_id": model_id,
+            "modelId": modelId,
             "JobURL": JobURL
         }, 3)
 
@@ -325,6 +357,7 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
             "msg": "生成失败",
             "server_config": server_config,
             "model_id": model_id,
+            "modelId": modelId,
             "JobURL": JobURL
         }, 3)
 
@@ -345,11 +378,14 @@ class VideoData(BaseModel):
     model_id: str
     length: int
     user_id: str
+    count: int
+    modelId: str
     callbackUrl: str
+    
 
 
 @app.post("/api/train/start")
 async def generate_prompt(data: VideoData):
-    asyncio.create_task(start_jobs(data.server_config, data.lr, data.unet_lr, data.text_encoder_lr, data.max_train_epoches, data.network_dim, data.network_alpha, data.type, data.trigger_word, data.JobURL, data.model, data.model_id, data.length, data.data_id, data.user_id,  data.callbackUrl))
+    asyncio.create_task(start_jobs(data.server_config, data.lr, data.unet_lr, data.text_encoder_lr, data.max_train_epoches, data.network_dim, data.network_alpha, data.type, data.trigger_word, data.JobURL, data.model, data.model_id, data.length, data.data_id, data.user_id, data.count, data.modelId, data.callbackUrl))
 
     return {"code": 0, "msg": "success"}
