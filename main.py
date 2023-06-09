@@ -45,7 +45,7 @@ async def common_request_callback(url, config):
             else:
                 return await response.text()
 
-def download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id, TRAIN_DIR):
+def download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id, model_id, TRAIN_DIR):
     # 下载 JSON 文件
     response = cos_client.get_object(Bucket=PRIVATE_BUCKET, Key=f"user-train/{user_id}/{data_id}/config.json")
     response_body = response["Body"].read()
@@ -76,11 +76,50 @@ def download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id,
         )
         response['Body'].get_stream_to_file(local_file_path)
 
-#         # 保存文件
-#         with open(local_file_path, "wb") as f:
-#             f.write(response["Body"].read())
-
         print(f"Downloaded file: {local_file_path}")
+
+        # 取第一张图片上传到腾讯云
+        if i == 0:
+            print("上传封面开始")
+            # 构建图片路径
+            image_path = f"user-train/{model_id}/cover.jpg"
+            cos_client.upload_file(
+                Bucket=BUCKET,
+                Key=image_path,
+                LocalFilePath=local_file_path,
+                EnableMD5=False
+            )
+            print("上传封面成功")
+
+
+    # 取第一张图片上传到腾讯云
+    # 构建图片路径
+    # image_path = f"user-train/{user_id}/{data_id}/{list_data[0]}"
+    # 下载文件
+
+def upload_files_to_cos(TRAIN_DIR, model_id):
+    # 读取目录下的文件并获取前四个txt文件的内容
+    file_list = os.listdir(TRAIN_DIR)
+    file_list.sort()
+    contents = []
+    for file in file_list:
+        if file.endswith(".txt"):
+            with open(os.path.join(TRAIN_DIR, file), 'r', encoding='utf-8') as f:
+                contents.append(f.read())
+        if len(contents) == 4:
+            break
+
+    # 将获取的内容保存为JSON文件
+    # 将获取的内容转为JSON格式
+    json_content = json.dumps(contents).encode('utf-8')
+
+    # 上传文件到腾讯云
+    cos_client.put_object(
+        Bucket=BUCKET,
+        Key=f"user-train/{model_id}/recommend.json",
+        Body=json_content,
+        EnableMD5=False
+    )
 
 async def run_command(env, callback_url, model_id, server_config, JobURL, *args):
     # Create the subprocess
@@ -108,7 +147,7 @@ async def run_command(env, callback_url, model_id, server_config, JobURL, *args)
                 "status": 0,
                 "msg": "进行中",
                 "process": progress * 100,
-                "status": 1,
+                "status": 0,
                 "server_config": server_config,
                 "model_id": model_id,
                 "JobURL": JobURL
@@ -156,15 +195,7 @@ class RequestLoggerAdapter(logging.LoggerAdapter):
         return msg, kwargs
 
 
-async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoches, network_dim, network_alpha, type, trigger_word, JobURL, model, model_id, length, data_id, user_id, count, modelId, callback_url):
-    #    步骤1：获取视频的id
-    #    步骤2：使用ffmpeg拆帧
-    #    步骤3：使用自动缩放图片大小
-    #    步骤4：使用img2img进行图片转换
-    #    步骤5：提取原视频的音频
-    #    步骤6：使用ffmpeg合成视频
-
-    
+async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoches, network_dim, network_alpha, type, trigger_word, JobURL, model, model_id, length, data_id, user_id, modelId, callback_url):
 
     start_time = datetime.now().timestamp()
 
@@ -201,93 +232,19 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
             KEY_WORD = trigger_word
         ROOT_PATH = "/root/autodl-tmp/lora-scripts"
 
-        # os.environ['ROOT_PATH'] = ROOT_PATH
-        # os.environ['FROM_MODEL'] = model
-        # os.environ['lr'] = str(lr)
-        # os.environ['unet_lr'] = str(unet_lr)
-        # os.environ['text_encoder_lr'] = str(text_encoder_lr)
-        # os.environ['max_train_epoches'] = str(max_train_epoches)
-        # os.environ['network_dim'] = str(network_dim)
-        # os.environ['network_alpha'] = str(network_alpha)
-        # os.environ['model_ckpt'] = model
-        # os.environ['KEY_WORD'] = KEY_WORD
-        # os.environ['LORA_NAME'] = LORA_NAME
-
         TRAIN_DIR = os.path.join(ROOT_PATH, f"{model_id}-input", f"{length}_{model_id}")
 
         # 创建目录
         os.makedirs(TRAIN_DIR, exist_ok=True)
 
-        # os.environ['TRAIN_DIR'] = TRAIN_DIR
-
-        # 获取配置
-        # response = cos_client.get_object(
-        #     Bucket=PRIVATE_BUCKET, Key=f"user-train/{user_id}/{data_id}.json")
-
-        # # 假设 response 是腾讯云 COS 返回的 JSON 文件内容
-        # response_body = response["Body"].read()
-
-        # # 解析 JSON 数据
-        # json_data = json.loads(response_body)
-
-        # # 提取列表数据
-        # list_data = json_data["list"]
-
         # 下载图片
         logger_adapter.info("开始下载图片")
-        download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id, TRAIN_DIR)
+        download_and_extract_list_data(cos_client, PRIVATE_BUCKET, user_id, data_id, model_id, TRAIN_DIR)
         logger_adapter.info("下载图片结束")
-        # 下载图片
-        # subprocess.run(["coscmd", "download", "-r", f"/train-instance/{LORA_NAME}/", TRAIN_DIR], check=True)
-
-        # 批量替换文件
-        # os.chdir(TRAIN_DIR)
-        # for filename in os.listdir('.'):
-        #     if filename.endswith(".PNG"):
-        #         os.rename(filename, filename.replace('.PNG', '.png'))
-        #     if filename.endswith(".JPG"):
-        #         os.rename(filename, filename.replace('.JPG', '.jpg'))
-
-        # os.chdir(ROOT_PATH)
-
-        # 解析词汇
-        # logger_adapter.info("开始解析词汇")
-        # subprocess.run(["python", f"{ROOT_PATH}/sd-scripts/finetune/make_captions.py", TRAIN_DIR, "--batch_size=8", "--caption_extension=.txt", f"--caption_weights={ROOT_PATH}/sd-scripts/model_large_caption.pth"], check=True)
-        # logger_adapter.info("解析词汇结束")
-
-        # Label optimization
-        #if TYPE != "3":
-        #    subprocess.run(["python", f"{ROOT_PATH}/batch_text2.py", "--path=", TRAIN_DIR, "--trigger=", KEY_WORD], check=True)
-        #    subprocess.run(["python", f"{ROOT_PATH}/batch_text.py", "--dir_path=", TRAIN_DIR], check=True)
-
-        # 增加关键词
-        # logger_adapter.info("开始增加关键词")
-        # logger_adapter.info("增加关键词结束")
-        
-        # subprocess.run(["python", f"{ROOT_PATH}/batch_keyword.py", "--dir_path=", TRAIN_DIR, "--keyword=", f"{KEY_WORD},"], check=True)
-        # # 训练
-        # logger_adapter.info("开始训练")
-        # subprocess.run(["bash", "-x", f"{ROOT_PATH}/train.sh"], check=True)
-        # logger_adapter.info("训练结束")
 
         # 执行shell
         logger_adapter.info("开始训练")
-        # try:
-        #     process = subprocess.run(["bash", "-x", f"lora-train.sh"],
-        #                             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
-        #     # 捕获输出流
-        #     output = process.stdout.decode("utf-8")
-        #     logger_adapter.info(f"标准输出：{output}")
-            
-        #     # 捕获错误流
-        #     error = process.stderr.decode("utf-8")
-        #     logger_adapter.info(f"标准输出：{error}")
-            
-        # except subprocess.CalledProcessError as e:
-        #     # 处理命令执行异常
-        #     logger_adapter.info(f"命令执行失败：{e}")
-        #     return
+        
         env_vars = {
             'ROOT_PATH': ROOT_PATH,
             'FROM_MODEL': model,
@@ -303,18 +260,19 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
             'TRAIN_DIR': TRAIN_DIR
         }
         try:
-            logger_adapter.info("开始训练")
             await run_command(env_vars, callback_url, model_id, server_config, JobURL, "bash", "-x", "lora-train.sh")
         except Exception as e:
             # 处理命令执行异常
             logger_adapter.error(f"命令执行失败：{e}")
             return
         
-        # 读取文本上传参考词
-        
-
-
         logger_adapter.info("训练结束")
+        
+        # 读取文本上传参考词
+        logger_adapter.info("开始上传参考词")
+        upload_files_to_cos(TRAIN_DIR, model_id)
+        logger_adapter.info("上传参考词结束")
+
         # 上传lora
         logger_adapter.info("开始上传lora")
         shutil.copy(f"{ROOT_PATH}/output/{LORA_NAME}.safetensors", "/root/autodl-nas/Lora")
@@ -337,12 +295,11 @@ async def start_jobs(server_config, lr, unet_lr, text_encoder_lr, max_train_epoc
 
         # 回调
         end_time = datetime.now().timestamp()
-        duration = (end_time - start_time) / 1000
+        duration = end_time - start_time
         logger_adapter.info(f"耗时：{duration}")
         await callback_sync_url(model_id, callback_url, {
             "status": 1,
             "msg": "生成成功",
-            "count": count,
             "duration": duration,
             "server_config": server_config,
             "model_id": model_id,
@@ -378,7 +335,6 @@ class VideoData(BaseModel):
     model_id: str
     length: int
     user_id: str
-    count: int
     modelId: str
     callbackUrl: str
     
@@ -386,6 +342,6 @@ class VideoData(BaseModel):
 
 @app.post("/api/train/start")
 async def generate_prompt(data: VideoData):
-    asyncio.create_task(start_jobs(data.server_config, data.lr, data.unet_lr, data.text_encoder_lr, data.max_train_epoches, data.network_dim, data.network_alpha, data.type, data.trigger_word, data.JobURL, data.model, data.model_id, data.length, data.data_id, data.user_id, data.count, data.modelId, data.callbackUrl))
+    asyncio.create_task(start_jobs(data.server_config, data.lr, data.unet_lr, data.text_encoder_lr, data.max_train_epoches, data.network_dim, data.network_alpha, data.type, data.trigger_word, data.JobURL, data.model, data.model_id, data.length, data.data_id, data.user_id, data.modelId, data.callbackUrl))
 
     return {"code": 0, "msg": "success"}
